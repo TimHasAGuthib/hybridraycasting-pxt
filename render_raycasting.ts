@@ -103,16 +103,17 @@ namespace HybridRender {
         const flags: boolean[] = []
         for (let i = 0; i < textures.length; i++) {
             const t = textures[i]
-            flags[i] = false
-            if (!t) continue
-            outer: for (let ty = 0; ty < t.height; ty++) {
-                for (let tx = 0; tx < t.width; tx++) {
-                    if (t.getPixel(tx, ty) == 0) {
-                        flags[i] = true
-                        break outer
+            let found = false
+            if (t) {
+                for (let ty = 0; ty < t.height && !found; ty++) {
+                    for (let tx = 0; tx < t.width && !found; tx++) {
+                        if (t.getPixel(tx, ty) == 0) {
+                            found = true
+                        }
                     }
                 }
             }
+            flags[i] = found
         }
         return flags
     }
@@ -157,18 +158,6 @@ namespace HybridRender {
         protected oldRender: scene.Renderable
         protected myRender: scene.Renderable
         protected _ceilingMap: tiles.TileMapData
-
-        // true for each texture index that contains at least one transparent (index 0)
-        // pixel; computed once when textures load so per-column ray marching can tell,
-        // in O(1), whether it needs to keep looking for what's behind a hit
-        hasTransparency: boolean[] = []
-
-        // preallocated, reused every column: the stack of wall hits found while
-        // marching a ray past transparent tiles, nearest hit stored at index 0
-        private hitMapX: number[] = []
-        private hitMapY: number[] = []
-        private hitSide: boolean[] = []
-        private hitColor: number[] = []
 
         //render
         protected wallHeightInView: number
@@ -611,7 +600,7 @@ namespace HybridRender {
                 if (sourceY < 0)
                     sourceY = 0
                 const c = source.getPixel(sourceX, sourceY)
-                if (c) this.tempScreen.setPixel(screenX, y, c)
+                this.tempScreen.setPixel(screenX, y, c)
                 y--
                 sourceY -= stepY
             }
@@ -623,7 +612,7 @@ namespace HybridRender {
                 screenDown = SH
             while (y < Math.round(screenDown)) {
                 const c = source.getPixel(sourceX, sourceY)
-                if (c) this.tempScreen.setPixel(screenX, y, c)
+                this.tempScreen.setPixel(screenX, y, c)
                 y++
                 sourceY += stepY
             }
@@ -652,9 +641,6 @@ namespace HybridRender {
             let fmapY = this.selfYFpx / fpx_scale
 
             const sc = game.currentScene()
-            // clear each frame so transparent floor/ceiling pixels reveal a clean
-            // background instead of the previous frame's leftover pixels
-            this.tempScreen.fill(scene.backgroundColor())
             // background
             const speed = 2 // 2: normal speed
             let backgroundOffset = (this._angle / Math.PI * speed) % 1  // range -1..1
@@ -704,7 +690,7 @@ namespace HybridRender {
                         rowTexCache[tileType] = darkTex
                     }
                     let c = darkTex.getPixel(tx, ty);
-                    if (c) this.tempScreen.setPixel(x, y, c);
+                    this.tempScreen.setPixel(x, y, c);
                 }
             }
 
@@ -748,7 +734,7 @@ namespace HybridRender {
                             rowTexCache[tileType] = darkTex
                         }
                         let c = darkTex.getPixel(tx, ty);
-                        if (c) this.tempScreen.setPixel(x, y, c);
+                        this.tempScreen.setPixel(x, y, c);
                     }
                 }
             }
@@ -795,7 +781,6 @@ namespace HybridRender {
                 }
 
                 let color = 0
-                let hitCount = 0
 
                 while (true) {
                     //jump to next map square, OR in x-direction, OR in y-direction
@@ -812,82 +797,65 @@ namespace HybridRender {
                     if (this.map.isOutsideMap(mapX, mapY))
                         break
                     color = this.map.getTile(mapX, mapY)
-                    if (this.map.isWall(mapX, mapY)) {
-                        // record this hit; only keep marching past it if its texture
-                        // actually has transparent pixels worth looking through
-                        this.hitMapX[hitCount] = mapX
-                        this.hitMapY[hitCount] = mapY
-                        this.hitSide[hitCount] = sideWallHit
-                        this.hitColor[hitCount] = color
-                        hitCount++
-                        if (hitCount >= MAX_HITS_PER_COLUMN || !this.hasTransparency[color])
-                            break; // hit!
-                    }
+                    if (this.map.isWall(mapX, mapY))
+                        break; // hit!
                 }
 
-                if (hitCount == 0)
+                if (this.map.isOutsideMap(mapX, mapY))
                     continue
 
-                let drawStartTop = SH // top of the tallest (nearest) hit, for the sky fill above walls
-
-                // draw farthest hit first, nearest hit last, so a nearer transparent
-                // gap reveals the farther wall that was already drawn underneath it
-                for (let hi = hitCount - 1; hi >= 0; hi--) {
-                    mapX = this.hitMapX[hi]
-                    mapY = this.hitMapY[hi]
-                    sideWallHit = this.hitSide[hi]
-                    color = this.hitColor[hi]
-
-                    let perpWallDist = 0
-                    let wallX = 0
-                    if (!sideWallHit) {
-                        perpWallDist = Math.idiv(((mapX << fpx) - this.selfXFpx + (1 - mapStepX << fpx - 1)) << fpx, rayDirX)
-                        wallX = this.selfYFpx + (perpWallDist * rayDirY >> fpx);
-                    } else {
-                        perpWallDist = Math.idiv(((mapY << fpx) - this.selfYFpx + (1 - mapStepY << fpx - 1)) << fpx, rayDirY)
-                        wallX = this.selfXFpx + (perpWallDist * rayDirX >> fpx);
-                    }
-                    wallX &= FPX_MAX
-
-                    let tex = this.textures[color]
-                    if (!tex)
-                        continue
-
-                    const dis = Math.abs(perpWallDist) / fpx_scale
-                    tex = this.darkenTexture(tex, dis)
-
-                    let texX = (wallX * tex.width) >> fpx;
-
-                    const lineHeight = (this.wallHeightInView / perpWallDist)
-                    const drawEnd = lineHeight * this.viewZPos / this.tilemapScaleSize / fpx_scale;
-                    const horizontBreak = 1 - this.viewZPos / this.tilemapScaleSize / fpx_scale;
-
-                    // the neighbor-column caching optimization only applies to the
-                    // nearest hit (hi==0), matching the original single-hit behaviour
-                    if (hi == 0 && perpWallDist !== lastDist && (texX !== lastTexX || mapX !== lastMapX || mapY !== lastMapY)) {
-
-                        drawStart = drawEnd - lineHeight * (this._wallZScale);
-                        drawHeight = (Math.ceil(drawEnd) - Math.ceil(drawStart))
-                        drawStart += (SH >> 1)
-
-                        lastDist = perpWallDist
-                        lastTexX = texX
-                        lastMapX = mapX
-                        lastMapY = mapY
-                    }
-                    //fix start&end points to avoid regmatic between lines
-
-                    this.blitRowBreak(x, SHHalf + drawEnd - lineHeight, SHHalf + drawEnd, tex, texX, tex.height * horizontBreak)
-
-                    if (hi == 0) {
-                        this.dist[x] = perpWallDist
-                        drawStartTop = drawStart
-                    }
+                let perpWallDist = 0
+                let wallX = 0
+                if (!sideWallHit) {
+                    perpWallDist = Math.idiv(((mapX << fpx) - this.selfXFpx + (1 - mapStepX << fpx - 1)) << fpx, rayDirX)
+                    wallX = this.selfYFpx + (perpWallDist * rayDirY >> fpx);
+                } else {
+                    perpWallDist = Math.idiv(((mapY << fpx) - this.selfYFpx + (1 - mapStepY << fpx - 1)) << fpx, rayDirY)
+                    wallX = this.selfXFpx + (perpWallDist * rayDirX >> fpx);
                 }
+                wallX &= FPX_MAX
+
+                // color = (color - 1) * 2
+                // if (sideWallHit) color++
+
+                let tex = this.textures[color]
+                if (!tex)
+                    continue
+
+                const dis = Math.abs(perpWallDist) / fpx_scale
+                tex = this.darkenTexture(tex, dis)
+
+                let texX = (wallX * tex.width) >> fpx;
+                // if ((!sideWallHit && rayDirX > 0) || (sideWallHit && rayDirY < 0))
+                //     texX = tex.width - texX - 1;
+
+                const lineHeight = (this.wallHeightInView / perpWallDist)
+                const drawEnd = lineHeight * this.viewZPos / this.tilemapScaleSize / fpx_scale;
+                const horizontBreak = 1 - this.viewZPos / this.tilemapScaleSize / fpx_scale;
+                if (perpWallDist !== lastDist && (texX !== lastTexX || mapX !== lastMapX || mapY !== lastMapY)) {//neighbor line of tex share same parameters
+
+                    drawStart = drawEnd - lineHeight * (this._wallZScale);
+                    drawHeight = (Math.ceil(drawEnd) - Math.ceil(drawStart))
+                    drawStart += (SH >> 1)
+
+                    lastDist = perpWallDist
+                    lastTexX = texX
+                    lastMapX = mapX
+                    lastMapY = mapY
+                }
+                //fix start&end points to avoid regmatic between lines
+
+
+                //if (x < SWHalf)
+                //    this.tempScreen.blitRow(x, drawStart, tex, texX, drawHeight)
+                //else
+                this.blitRowBreak(x, SHHalf + drawEnd - lineHeight, SHHalf + drawEnd, tex, texX, tex.height * horizontBreak)
+
+                this.dist[x] = perpWallDist
 
                 // background 
                 if (!this.ceilingMap) {
-                    for (let y = 0; y < drawStartTop; y++) {
+                    for (let y = 0; y < drawStart; y++) {
                         let backX = (backgroundOffset + x) % SW
                         let c = sc.background.image.getPixel(backX, y)
                         this.tempScreen.setPixel(x, y, c)
