@@ -889,5 +889,5 @@ namespace HybridRender {
     }
 
     //%fixedinstance
-    export const raycastingRender = new Render.RayCastingRender()
+    export const raycastingRender = new RayCastingRender()
 }
