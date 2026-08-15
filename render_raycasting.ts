@@ -654,7 +654,7 @@ namespace HybridRender {
             const sc = game.currentScene()
             // clear each frame so transparent floor/ceiling pixels reveal a clean
             // background instead of the previous frame's leftover pixels
-            this.tempScreen.fill(sc.backgroundColor())
+            this.tempScreen.fill(scene.backgroundColor())
             // background
             const speed = 2 // 2: normal speed
             let backgroundOffset = (this._angle / Math.PI * speed) % 1  // range -1..1
