@@ -29,6 +29,78 @@ namespace HybridRender {
 
     export const defaultFov = SW / SH / 2  //Wall just fill screen height when standing 1 tile away
 
+    // Default Arcade palette RGB values, used to compute physically correct darkened
+    // colors. If your project uses a custom palette (Project Settings > Colors),
+    // update these to match, or multi-colored textures will darken toward the wrong hues.
+    const paletteRGB: number[][] = [
+        [0, 0, 0],
+        [255, 255, 255],
+        [255, 33, 33],
+        [255, 147, 196],
+        [255, 129, 53],
+        [255, 246, 9],
+        [36, 156, 163],
+        [120, 220, 82],
+        [0, 63, 173],
+        [135, 242, 255],
+        [142, 46, 196],
+        [164, 131, 159],
+        [92, 64, 108],
+        [229, 205, 196],
+        [145, 70, 61],
+        [0, 0, 0]
+    ]
+
+    // Number of discrete brightness steps between pitch black and full brightness.
+    // Higher = smoother gradient, at the cost of a slightly larger one-time lookup table.
+    const DARK_LEVELS = 24
+
+    // darkLevelTable[level][originalColorIndex] = best-matching palette index for that
+    // color at that brightness level. Built once by blending each palette color toward
+    // black and snapping to the closest real palette entry, so hues stay correct instead
+    // of drifting to unrelated colors the way shifting the raw index number would.
+    function buildDarkLevelTable(): number[][] {
+        const table: number[][] = []
+        for (let level = 0; level < DARK_LEVELS; level++) {
+            const brightness = level / (DARK_LEVELS - 1)
+            const row: number[] = []
+            for (let c = 0; c < 16; c++) {
+                const src = paletteRGB[c]
+                const targetR = src[0] * brightness
+                const targetG = src[1] * brightness
+                const targetB = src[2] * brightness
+                let best = c
+                let bestDist = 1e9
+                for (let p = 1; p < 16; p++) { // never remap onto index 0 (transparent)
+                    const cand = paletteRGB[p]
+                    const dr = cand[0] - targetR
+                    const dg = cand[1] - targetG
+                    const db = cand[2] - targetB
+                    const d = dr * dr + dg * dg + db * db
+                    if (d < bestDist) {
+                        bestDist = d
+                        best = p
+                    }
+                }
+                row.push(best)
+            }
+            table.push(row)
+        }
+        return table
+    }
+
+    let darkLevelTable: number[][] = null
+
+    // 4x4 ordered (Bayer) dither matrix, values 0..15. Used to blend between two
+    // adjacent brightness levels pixel-by-pixel, so darkness appears to fade smoothly
+    // instead of snapping the whole surface to one flat palette color at a time.
+    const bayer4x4 = [
+        0, 8, 2, 10,
+        12, 4, 14, 6,
+        3, 11, 1, 9,
+        15, 7, 13, 5
+    ]
+
     export class RayCastingRender {
         private tempScreen: Image = image.create(SW, SH)
         public darknessMod = 1
@@ -167,6 +239,30 @@ namespace HybridRender {
         }
         set ceilingMap(ceilingMap: tiles.TileMapData) {
             this._ceilingMap = ceilingMap
+        }
+
+        // Converts a distance into a 0..1 brightness value. Clamped to 1 at dis=0, so
+        // close-up surfaces never appear brighter than the original texture.
+        brightnessAt(dis: number): number {
+            return Math.constrain((1 - dis / this.darknessMod) * this.textureVisibility, 0, 1)
+        }
+
+        // Darkens a single color for a given brightness, dithered against the screen
+        // pixel it's being drawn to. Rather than snapping the whole surface to one flat
+        // palette color per distance, this blends between the two nearest brightness
+        // levels using a Bayer pattern, so darkness fades smoothly pixel-by-pixel
+        // instead of banding in hard steps. Hue is preserved via the precomputed
+        // nearest-palette-color table (see buildDarkLevelTable).
+        ditheredColor(rawColor: number, brightness: number, screenX: number, screenY: number): number {
+            if (rawColor == 0) return 0 // never darken transparency itself
+            if (!darkLevelTable) darkLevelTable = buildDarkLevelTable()
+            const level = brightness * (DARK_LEVELS - 1)
+            const levelLow = level | 0 // floor
+            const frac = level - levelLow
+            const levelHigh = levelLow + 1 < DARK_LEVELS ? levelLow + 1 : levelLow
+            const threshold = bayer4x4[(screenY & 3) * 4 + (screenX & 3)] / 16
+            const chosenLevel = frac > threshold ? levelHigh : levelLow
+            return darkLevelTable[chosenLevel][rawColor]
         }
 
         getMotionZ(spr: Sprite, offsetZ: number = 0) {
@@ -483,7 +579,7 @@ namespace HybridRender {
         }
 
 
-        blitRowBreak(screenX: number, screenUp: number, screenDown: number, source: Image, sourceX: number, sourceYBreak: number) {
+        blitRowBreak(screenX: number, screenUp: number, screenDown: number, source: Image, sourceX: number, sourceYBreak: number, brightness: number) {
 
             let stepY = (sourceYBreak) / (SHHalf - screenUp)
             let sourceY = sourceYBreak - stepY
@@ -493,7 +589,8 @@ namespace HybridRender {
             while (y >= Math.ceil(screenUp) - 1) {
                 if (sourceY < 0)
                     sourceY = 0
-                const c = source.getPixel(sourceX, sourceY)
+                const raw = source.getPixel(sourceX, sourceY)
+                const c = this.ditheredColor(raw, brightness, screenX, y)
                 this.tempScreen.setPixel(screenX, y, c)
                 y--
                 sourceY -= stepY
@@ -505,7 +602,8 @@ namespace HybridRender {
             if (screenDown > SH)
                 screenDown = SH
             while (y < Math.round(screenDown)) {
-                const c = source.getPixel(sourceX, sourceY)
+                const raw = source.getPixel(sourceX, sourceY)
+                const c = this.ditheredColor(raw, brightness, screenX, y)
                 this.tempScreen.setPixel(screenX, y, c)
                 y++
                 sourceY += stepY
@@ -552,10 +650,9 @@ namespace HybridRender {
                 let floorX = fmapX + rowDistance * rayDirX0;
                 let floorY = fmapY + rowDistance * rayDirY0;
 
-                // darkened texture cache for this row: every pixel in a row shares the
-                // same camera distance, so each distinct texture only needs darkening once
-                const rowTexCache: Image[] = []
-                const rowDis = Math.abs(rowDistance)
+                // every pixel in a row shares the same camera distance, so brightness
+                // only needs computing once per row; dithering still varies per pixel
+                const rowBrightness = this.brightnessAt(Math.abs(rowDistance))
 
                 for (let x = 0; x < SW; x++) {
                     let cellX = Math.floor(floorX);
@@ -578,15 +675,8 @@ namespace HybridRender {
                     if (!floorTex)
                         continue
 
-                    let darkTex = rowTexCache[tileType]
-                    if (!darkTex) {
-                        darkTex = floorTex.clone()
-                        for (let i = 0; i < 15; i++) {
-                            darkTex.replace(15 - i, Math.constrain((15 - i) / this.textureVisibility + rowDis / this.darknessMod, 1, 15))
-                        }
-                        rowTexCache[tileType] = darkTex
-                    }
-                    let c = darkTex.getPixel(tx, ty);
+                    let raw = floorTex.getPixel(tx, ty);
+                    let c = this.ditheredColor(raw, rowBrightness, x, y);
                     this.tempScreen.setPixel(x, y, c);
                 }
             }
@@ -605,9 +695,8 @@ namespace HybridRender {
                     let ceilingX = fmapX + rowDistance * rayDirX0;
                     let ceilingY = fmapY + rowDistance * rayDirY0;
 
-                    // same per-row darkened texture cache as the floor loop above
-                    const rowTexCache: Image[] = []
-                    const rowDis = Math.abs(rowDistance)
+                    // same per-row brightness as the floor loop above; dithering varies per pixel
+                    const rowBrightness = this.brightnessAt(Math.abs(rowDistance))
 
                     for (let x = 0; x < SW; x++) {
                         let cellX = Math.floor(ceilingX);
@@ -625,15 +714,8 @@ namespace HybridRender {
                         if (!ceilingTex)
                             continue
 
-                        let darkTex = rowTexCache[tileType]
-                        if (!darkTex) {
-                            darkTex = ceilingTex.clone()
-                            for (let i = 0; i < 15; i++) {
-                                darkTex.replace(15 - i, Math.constrain((15 - i) / this.textureVisibility + rowDis / this.darknessMod, 1, 15))
-                            }
-                            rowTexCache[tileType] = darkTex
-                        }
-                        let c = darkTex.getPixel(tx, ty);
+                        let raw = ceilingTex.getPixel(tx, ty);
+                        let c = this.ditheredColor(raw, rowBrightness, x, y);
                         this.tempScreen.setPixel(x, y, c);
                     }
                 }
@@ -722,11 +804,8 @@ namespace HybridRender {
                 if (!tex)
                     continue
 
-                tex = tex.clone()
-                const dis = Math.sqrt((mapX - this.xFpx / fpx_scale) ** 2 + (mapY - this.yFpx / fpx_scale) ** 2)
-                for (let i = 0; i < 15; i++) {
-                    tex.replace(15 - i, Math.constrain((15 - i) / this.textureVisibility + dis / this.darknessMod, 1, 15))
-                }
+                const dis = Math.abs(perpWallDist) / fpx_scale
+                const brightness = this.brightnessAt(dis)
 
                 let texX = (wallX * tex.width) >> fpx;
                 // if ((!sideWallHit && rayDirX > 0) || (sideWallHit && rayDirY < 0))
@@ -752,7 +831,7 @@ namespace HybridRender {
                 //if (x < SWHalf)
                 //    this.tempScreen.blitRow(x, drawStart, tex, texX, drawHeight)
                 //else
-                this.blitRowBreak(x, SHHalf + drawEnd - lineHeight, SHHalf + drawEnd, tex, texX, tex.height * horizontBreak)
+                this.blitRowBreak(x, SHHalf + drawEnd - lineHeight, SHHalf + drawEnd, tex, texX, tex.height * horizontBreak, brightness)
 
                 this.dist[x] = perpWallDist
 
