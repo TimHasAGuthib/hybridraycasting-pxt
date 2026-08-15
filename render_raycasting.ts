@@ -30,6 +30,7 @@ namespace HybridRender {
     export const defaultFov = SW / SH / 2  //Wall just fill screen height when standing 1 tile away
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     // Default Arcade palette RGB values, used to compute physically correct darkened
     // colors. If your project uses a custom palette (Project Settings > Colors),
     // update these to match, or multi-colored textures will darken toward the wrong hues.
@@ -119,6 +120,8 @@ namespace HybridRender {
         return flags
     }
 
+=======
+>>>>>>> parent of f67e1ab (Update render_raycasting.ts)
 =======
 >>>>>>> parent of f67e1ab (Update render_raycasting.ts)
     export class RayCastingRender {
