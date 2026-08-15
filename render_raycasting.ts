@@ -53,7 +53,7 @@ namespace HybridRender {
 
     // Number of discrete brightness steps between pitch black and full brightness.
     // Higher = smoother gradient, at the cost of a slightly larger one-time lookup table.
-    const DARK_LEVELS = 48
+    const DARK_LEVELS = 24
 
     // darkLevelTable[level][originalColorIndex] = best-matching palette index for that
     // color at that brightness level. Built once by blending each palette color toward
