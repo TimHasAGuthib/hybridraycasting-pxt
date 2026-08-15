@@ -218,13 +218,32 @@ namespace HybridRender {
     }
 
     /**
+     * Set the darkness falloff and base texture visibility used to shade walls by distance.
+     * @param dm darkness modifier, larger values let light travel farther before walls go dark, eg: 1
+     * @param tm texture visibility, scales how much the texture's own shading is preserved up close, eg: 1
+     */
+    //% blockId=rcRender_setDarkness
+    //% block="set darkness modifier $dm texture visibility $tm"
+    //% dm.min=0.1 dm.defl=1
+    //% tm.min=0.1 tm.defl=1
+    //% group="Basic"
+    //% weight=81
+    //% help=github:pxt-raycasting/docs/set-darkness
+    export function changeBrightness(dm = 1, tm = 1) {
+        if (dm <= 0) dm = 0.01
+        if (tm <= 0) tm = 0.01
+        raycastingRender.darknessMod = dm
+        raycastingRender.textureVisibility = tm
+    }
+
+    /**
      * Get default FOV (field of view) value
      * @param viewMode
      */
     //% group="Basic"
     //% block="defaultFov"
     //% blockId=rcRender_getDefaultFov
-    //% weight=81
+    //% weight=80
     //% help=github:pxt-raycasting/docs/get-default-fov
     export function getDefaultFov(): number {
         return defaultFov
@@ -237,7 +256,7 @@ namespace HybridRender {
     //% blockId=rcRender_setViewAngleInDegree block="set view angle$angle"
     //% angle.min=0 angle.max=360 angle.defl=90
     //% group="Basic"
-    //% weight=80
+    //% weight=79
     //% help=github:pxt-raycasting/docs/set-view-angle-in-degree
     export function setViewAngleInDegree(angle: number) {
         raycastingRender.viewAngle = angle * Math.PI / 180
@@ -250,7 +269,7 @@ namespace HybridRender {
      */
     //% blockId=rcRender_setViewAngle block="set view angle by dirX%dirX and dirY%dirY"
     //% group="Basic"
-    //% weight=79
+    //% weight=78
     //% help=github:pxt-raycasting/docs/set-view-angle
     export function setViewAngle(dirX: number, dirY: number) {
         raycastingRender.viewAngle = Math.atan2(dirY, dirX)
@@ -431,7 +450,7 @@ namespace HybridRender {
      * Run on sprite dirction updated, present view point to Sprite facing dirction, or which angle you see of the sprite.
      * Just using with other animation extensions, to set proper Image for sprite.
      * Not required, if you have used the set animations block provided.
-     * @param dir It is a float number, 0~1 corresponds to 0~360°, suggest use Math.round(dir*dirAniTotalCount)%dirAniTotalCount to get index of direction
+     * @param dir It is a float number, 0~1 corresponds to 0~360° suggest use Math.round(dir*dirAniTotalCount)%dirAniTotalCount to get index of direction
      */
     //% blockId=rcRender_registerOnSpriteDirectionUpdateHandler
     //% block="run code when sprite $spr dirction updated to $dir"
