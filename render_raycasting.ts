@@ -29,8 +29,6 @@ namespace HybridRender {
 
     export const defaultFov = SW / SH / 2  //Wall just fill screen height when standing 1 tile away
 
-<<<<<<< HEAD
-<<<<<<< HEAD
     // Default Arcade palette RGB values, used to compute physically correct darkened
     // colors. If your project uses a custom palette (Project Settings > Colors),
     // update these to match, or multi-colored textures will darken toward the wrong hues.
@@ -93,37 +91,6 @@ namespace HybridRender {
 
     let darkLevelTable: number[][] = null
 
-    // Safety cap on how many walls a single ray is allowed to march through when
-    // punching through transparent tiles (fences, windows...). Bounds worst-case
-    // cost per column if someone builds a corridor entirely out of see-through tiles.
-    const MAX_HITS_PER_COLUMN = 4
-
-    // Scans a tileset once and reports, per texture index, whether it contains any
-    // transparent (index 0) pixel. Used so the raycaster only pays the cost of
-    // marching past a wall when that wall could actually have gaps to see through.
-    function computeTransparencyFlags(textures: Image[]): boolean[] {
-        const flags: boolean[] = []
-        for (let i = 0; i < textures.length; i++) {
-            const t = textures[i]
-            let found = false
-            if (t) {
-                for (let ty = 0; ty < t.height && !found; ty++) {
-                    for (let tx = 0; tx < t.width && !found; tx++) {
-                        if (t.getPixel(tx, ty) == 0) {
-                            found = true
-                        }
-                    }
-                }
-            }
-            flags[i] = found
-        }
-        return flags
-    }
-
-=======
->>>>>>> parent of f67e1ab (Update render_raycasting.ts)
-=======
->>>>>>> parent of f67e1ab (Update render_raycasting.ts)
     export class RayCastingRender {
         private tempScreen: Image = image.create(SW, SH)
         public darknessMod = 1
@@ -264,6 +231,22 @@ namespace HybridRender {
             this._ceilingMap = ceilingMap
         }
 
+        // Darkens a texture for a given (continuous) distance, blending each color toward
+        // black and snapping to the nearest real palette color so hues stay correct.
+        // brightness is clamped to 1 at dis=0, so close-up surfaces never appear brighter
+        // than the original texture.
+        darkenTexture(tex: Image, dis: number): Image {
+            if (!darkLevelTable) darkLevelTable = buildDarkLevelTable()
+            const brightness = Math.constrain((1 - dis / this.darknessMod) * this.textureVisibility, 0, 1)
+            const level = Math.round(brightness * (DARK_LEVELS - 1))
+            const table = darkLevelTable[level]
+            const darkened = tex.clone()
+            for (let i = 1; i < 16; i++) {
+                darkened.replace(i, table[i])
+            }
+            return darkened
+        }
+
         getMotionZ(spr: Sprite, offsetZ: number = 0) {
             let motionZ = this.spriteMotionZ[spr.id]
             if (!motionZ) {
@@ -396,7 +379,6 @@ namespace HybridRender {
             const sc = game.currentScene()
             this.map = sc.tileMap.data
             this.textures = sc.tileMap.data.getTileset()
-            this.hasTransparency = computeTransparencyFlags(this.textures)
             this.tilemapScaleSize = 1 << sc.tileMap.data.scale
             this.oldRender = sc.tileMap.renderable
             this.spriteLikes.removeElement(this.oldRender)
@@ -676,10 +658,7 @@ namespace HybridRender {
 
                     let darkTex = rowTexCache[tileType]
                     if (!darkTex) {
-                        darkTex = floorTex.clone()
-                        for (let i = 0; i < 15; i++) {
-                            darkTex.replace(15 - i, Math.constrain((15 - i) / this.textureVisibility + rowDis / this.darknessMod, 1, 15))
-                        }
+                        darkTex = this.darkenTexture(floorTex, rowDis)
                         rowTexCache[tileType] = darkTex
                     }
                     let c = darkTex.getPixel(tx, ty);
@@ -723,10 +702,7 @@ namespace HybridRender {
 
                         let darkTex = rowTexCache[tileType]
                         if (!darkTex) {
-                            darkTex = ceilingTex.clone()
-                            for (let i = 0; i < 15; i++) {
-                                darkTex.replace(15 - i, Math.constrain((15 - i) / this.textureVisibility + rowDis / this.darknessMod, 1, 15))
-                            }
+                            darkTex = this.darkenTexture(ceilingTex, rowDis)
                             rowTexCache[tileType] = darkTex
                         }
                         let c = darkTex.getPixel(tx, ty);
@@ -818,11 +794,8 @@ namespace HybridRender {
                 if (!tex)
                     continue
 
-                tex = tex.clone()
-                const dis = Math.sqrt((mapX - this.xFpx / fpx_scale) ** 2 + (mapY - this.yFpx / fpx_scale) ** 2)
-                for (let i = 0; i < 15; i++) {
-                    tex.replace(15 - i, Math.constrain((15 - i) / this.textureVisibility + dis / this.darknessMod, 1, 15))
-                }
+                const dis = Math.abs(perpWallDist) / fpx_scale
+                tex = this.darkenTexture(tex, dis)
 
                 let texX = (wallX * tex.width) >> fpx;
                 // if ((!sideWallHit && rayDirX > 0) || (sideWallHit && rayDirY < 0))
