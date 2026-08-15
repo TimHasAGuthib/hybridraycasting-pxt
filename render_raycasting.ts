@@ -6,6 +6,14 @@ enum ViewMode {
     tilemapView,
     //% block="Raycasting Mode"
     raycastingView,
+//% shim=pxt::updateScreen
+function updateScreen(img: Image) { }
+
+enum ViewMode {
+    //% block="TileMap Mode"
+    tilemapView,
+    //% block="Raycasting Mode"
+    raycastingView,
 }
 
 namespace HybridRender {
@@ -31,6 +39,8 @@ namespace HybridRender {
 
     export class RayCastingRender {
         private tempScreen: Image = image.create(SW, SH)
+        public darknessMod = 1
+        public textureVisibility = 1
 
         velocityAngle: number = 2
         velocity: number = 3
@@ -685,9 +695,15 @@ namespace HybridRender {
                 // color = (color - 1) * 2
                 // if (sideWallHit) color++
 
-                const tex = this.textures[color]
+                let tex = this.textures[color]
                 if (!tex)
                     continue
+
+                tex = tex.clone()
+                const dis = Math.sqrt((mapX - this.xFpx) ** 2 + (mapY - this.yFpx) ** 2)
+                for (let i = 0; i < 15; i++) {
+                    tex.replace(15 - i, Math.constrain((15 - i) / this.textureVisibility + dis / this.darknessMod, 1, 15))
+                }
 
                 let texX = (wallX * tex.width) >> fpx;
                 // if ((!sideWallHit && rayDirX > 0) || (sideWallHit && rayDirY < 0))
