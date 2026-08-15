@@ -6,14 +6,6 @@ enum ViewMode {
     tilemapView,
     //% block="Raycasting Mode"
     raycastingView,
-//% shim=pxt::updateScreen
-function updateScreen(img: Image) { }
-
-enum ViewMode {
-    //% block="TileMap Mode"
-    tilemapView,
-    //% block="Raycasting Mode"
-    raycastingView,
 }
 
 namespace HybridRender {
