@@ -591,7 +591,7 @@ namespace HybridRender {
                     sourceY = 0
                 const raw = source.getPixel(sourceX, sourceY)
                 const c = this.ditheredColor(raw, brightness, screenX, y)
-                this.tempScreen.setPixel(screenX, y, c)
+                if (c) this.tempScreen.setPixel(screenX, y, c)
                 y--
                 sourceY -= stepY
             }
@@ -604,7 +604,7 @@ namespace HybridRender {
             while (y < Math.round(screenDown)) {
                 const raw = source.getPixel(sourceX, sourceY)
                 const c = this.ditheredColor(raw, brightness, screenX, y)
-                this.tempScreen.setPixel(screenX, y, c)
+                if (c) this.tempScreen.setPixel(screenX, y, c)
                 y++
                 sourceY += stepY
             }
@@ -633,6 +633,9 @@ namespace HybridRender {
             let fmapY = this.selfYFpx / fpx_scale
 
             const sc = game.currentScene()
+            // clear each frame so transparent floor/ceiling pixels reveal a clean
+            // background instead of the previous frame's leftover pixels
+            this.tempScreen.fill(scene.backgroundColor())
             // background
             const speed = 2 // 2: normal speed
             let backgroundOffset = (this._angle / Math.PI * speed) % 1  // range -1..1
@@ -677,7 +680,7 @@ namespace HybridRender {
 
                     let raw = floorTex.getPixel(tx, ty);
                     let c = this.ditheredColor(raw, rowBrightness, x, y);
-                    this.tempScreen.setPixel(x, y, c);
+                    if (c) this.tempScreen.setPixel(x, y, c);
                 }
             }
 
@@ -716,7 +719,7 @@ namespace HybridRender {
 
                         let raw = ceilingTex.getPixel(tx, ty);
                         let c = this.ditheredColor(raw, rowBrightness, x, y);
-                        this.tempScreen.setPixel(x, y, c);
+                        if (c) this.tempScreen.setPixel(x, y, c);
                     }
                 }
             }
