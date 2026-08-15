@@ -1,7 +1,6 @@
-
 game.stats = true
-const rcRender = Render.raycastingRender
-// Render.moveWithController(1.5,2,1)
+const rcRender = HybridRender.raycastingRender
+// HybridRender.moveWithController(1.5,2,1)
 
 // let trans16 = image.create(16, 16)
 scene.setBackgroundImage(img`
@@ -147,7 +146,7 @@ function createSprite(x: number, y: number, vx: number, vy: number, textures: Im
     spr.setBounceOnWall(true)
     spr.setScale(0.5)
     // setCharacterAnimationForSprite(spr, textures)
-    Render.setSpriteAnimations(spr, Render.createAnimations(150, textures[0], textures[1], textures[2], textures[3]))
+    HybridRender.setSpriteAnimations(spr, HybridRender.createAnimations(150, textures[0], textures[1], textures[2], textures[3]))
     // if (kind == SpriteKind.Enemy)
     //     tiles.placeOnRandomTile(spr, trans16)
     spr.sayText(spr.id + " test\n test", 9999)
@@ -172,10 +171,10 @@ let sprPlane = createSprite(9, 7, 6, 10, texturesPlane, SpriteKind.Enemy)
 let cake = createSprite(2, 2, 4, 2, texturesBigCake, SpriteKind.Enemy)
 let fish = createSprite(7, 9, 0, 0, texturesFish, SpriteKind.Enemy)
 
-Render.setSpriteAttribute(sprSkelly, RCSpriteAttribute.ZOffset, 4)
-Render.setSpriteAttribute(sprPlane, RCSpriteAttribute.ZOffset, 16)
-Render.setSpriteAttribute(cake, RCSpriteAttribute.ZOffset, 4)
-Render.setSpriteAttribute(fish, RCSpriteAttribute.ZOffset, 8)
+HybridRender.setSpriteAttribute(sprSkelly, RCSpriteAttribute.ZOffset, 4)
+HybridRender.setSpriteAttribute(sprPlane, RCSpriteAttribute.ZOffset, 16)
+HybridRender.setSpriteAttribute(cake, RCSpriteAttribute.ZOffset, 4)
+HybridRender.setSpriteAttribute(fish, RCSpriteAttribute.ZOffset, 8)
 // for(let i=0;i<10;i++){
 //     let spr=createSprite(4, 7, Math.randomRange(5,10), Math.randomRange(3,10), texturesCoin, SpriteKind.Food)
 //     tiles.placeOnRandomTile(spr, trans16)
@@ -205,7 +204,7 @@ sprites.onOverlap(SpriteKind.Enemy, SpriteKind.Projectile, function (sprite, oth
     // sprite.setKind(SpriteKind.Food)
     info.changeScoreBy(1)
     otherSprite.destroy()
-    // Render.setSpriteAnimations(sprite, new Render.Animations(120, texturesCoin))
+    // HybridRender.setSpriteAnimations(sprite, new HybridRender.Animations(120, texturesCoin))
     // sprite.setImage(sprites.builtin.coin0)
     sprite.setScale(.5)
     sprite.startEffect(effects.fire, 5000)
@@ -238,7 +237,7 @@ sprites.onOverlap(SpriteKind.Player, SpriteKind.Food, function (sprite, otherSpr
 })
 
 controller.menu.onEvent(ControllerButtonEvent.Pressed, () => {
-    Render.toggleViewMode()
+    HybridRender.toggleViewMode()
 })
 
 controller.B.repeatDelay = 0
@@ -247,7 +246,7 @@ let isAdjusting = false
 controller.anyButton.onEvent(ControllerButtonEvent.Pressed, () => {
     if (controller.B.isPressed()) {
         if (controller.A.isPressed()) {
-            Render.moveWithController(0, 0)
+            HybridRender.moveWithController(0, 0)
             isAdjusting = true
         } else {
             rcRender.jumpWithHeightAndDuration(rcRender.sprSelf, tilemapScale, 500)
@@ -256,37 +255,37 @@ controller.anyButton.onEvent(ControllerButtonEvent.Pressed, () => {
 })
 controller.B.onEvent(ControllerButtonEvent.Released, () => {
     isAdjusting = false
-    Render.moveWithController(1.5, 2)
+    HybridRender.moveWithController(1.5, 2)
 })
 controller.A.onEvent(ControllerButtonEvent.Released, () => {
     isAdjusting = false
-    Render.moveWithController(1.5, 2)
+    HybridRender.moveWithController(1.5, 2)
 })
 
 rcRender.wallZScale = 2
 
 let zOffset = 3// tilemapScale / 2
 rcRender.setZOffset(rcRender.sprSelf, zOffset, 0)
-let fov = Render.defaultFov
+let fov = HybridRender.defaultFov
 game.onUpdate(() => {
     if (isAdjusting) {
         // zOffset -= controller.dy(10)
         // rcRender.setZOffset(rcRender.sprSelf, zOffset, 0)
         fov -= controller.dy(1)
-        Render.setAttribute(Render.attribute.fov, fov)
+        HybridRender.setAttribute(HybridRender.attribute.fov, fov)
         info.setScore(zOffset * 100)
     }
 })
 
 
 // controller.B.onEvent(ControllerButtonEvent.Pressed, () => {
-//     for (let fov = Render.defaultFov; fov > Render.defaultFov - .6; fov -= .06) {
+//     for (let fov = HybridRender.defaultFov; fov > HybridRender.defaultFov - .6; fov -= .06) {
 //         rcRender.fov=fov
 //         pause(20)
 //     }
 // })
 // controller.B.onEvent(ControllerButtonEvent.Released, () => {
-//     for (let fov = Render.defaultFov - .6; fov <= Render.defaultFov; fov += .06) {
+//     for (let fov = HybridRender.defaultFov - .6; fov <= HybridRender.defaultFov; fov += .06) {
 //         rcRender.fov=fov
 //         pause(20)
 //     }
@@ -304,5 +303,3 @@ info.setLife(3)
 // let mySprite = sprites.create(sprites.builtin.computer1, SpriteKind.Player)
 // mySprite.setPosition(80,10)
 // mySprite.setFlag(SpriteFlag.RelativeToCamera, true)
-
-
