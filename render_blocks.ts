@@ -10,7 +10,7 @@ enum RCSpriteAttribute {
 //% color=#03AA74 weight=1 icon="\uf1b2" //cube f1b2 , fold f279
 //% groups='["Instance","Basic", "Dimension Z", "Animate", "Advanced"]'
 //% block="3D Render"
-namespace Render {
+namespace HybridRender {
     export enum attribute {
         dirX,
         dirY,
