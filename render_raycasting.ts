@@ -8,7 +8,7 @@ enum ViewMode {
     raycastingView,
 }
 
-namespace Render {
+namespace HybridRender {
     const SH = screen.height, SHHalf = SH / 2
     const SW = screen.width, SWHalf = SW / 2
     const fpx = 8
