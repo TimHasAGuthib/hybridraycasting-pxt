@@ -551,6 +551,12 @@ namespace HybridRender {
 
                 let floorX = fmapX + rowDistance * rayDirX0;
                 let floorY = fmapY + rowDistance * rayDirY0;
+
+                // darkened texture cache for this row: every pixel in a row shares the
+                // same camera distance, so each distinct texture only needs darkening once
+                const rowTexCache: Image[] = []
+                const rowDis = Math.abs(rowDistance)
+
                 for (let x = 0; x < SW; x++) {
                     let cellX = Math.floor(floorX);
                     let cellY = Math.floor(floorY);
@@ -569,7 +575,18 @@ namespace HybridRender {
                     let floorTex = this.textures[tileType];
                     floorX += floorStepX;
                     floorY += floorStepY;
-                    let c = floorTex.getPixel(tx, ty);
+                    if (!floorTex)
+                        continue
+
+                    let darkTex = rowTexCache[tileType]
+                    if (!darkTex) {
+                        darkTex = floorTex.clone()
+                        for (let i = 0; i < 15; i++) {
+                            darkTex.replace(15 - i, Math.constrain((15 - i) / this.textureVisibility + rowDis / this.darknessMod, 1, 15))
+                        }
+                        rowTexCache[tileType] = darkTex
+                    }
+                    let c = darkTex.getPixel(tx, ty);
                     this.tempScreen.setPixel(x, y, c);
                 }
             }
@@ -588,6 +605,10 @@ namespace HybridRender {
                     let ceilingX = fmapX + rowDistance * rayDirX0;
                     let ceilingY = fmapY + rowDistance * rayDirY0;
 
+                    // same per-row darkened texture cache as the floor loop above
+                    const rowTexCache: Image[] = []
+                    const rowDis = Math.abs(rowDistance)
+
                     for (let x = 0; x < SW; x++) {
                         let cellX = Math.floor(ceilingX);
                         let cellY = Math.floor(ceilingY);
@@ -601,8 +622,18 @@ namespace HybridRender {
                         let ceilingTex = this.ceilingTextures[tileType];
                         ceilingX += ceilingStepX;
                         ceilingY += ceilingStepY;
+                        if (!ceilingTex)
+                            continue
 
-                        let c = ceilingTex.getPixel(tx, ty);
+                        let darkTex = rowTexCache[tileType]
+                        if (!darkTex) {
+                            darkTex = ceilingTex.clone()
+                            for (let i = 0; i < 15; i++) {
+                                darkTex.replace(15 - i, Math.constrain((15 - i) / this.textureVisibility + rowDis / this.darknessMod, 1, 15))
+                            }
+                            rowTexCache[tileType] = darkTex
+                        }
+                        let c = darkTex.getPixel(tx, ty);
                         this.tempScreen.setPixel(x, y, c);
                     }
                 }
@@ -692,7 +723,7 @@ namespace HybridRender {
                     continue
 
                 tex = tex.clone()
-                const dis = Math.sqrt((mapX - this.xFpx) ** 2 + (mapY - this.yFpx) ** 2)
+                const dis = Math.sqrt((mapX - this.xFpx / fpx_scale) ** 2 + (mapY - this.yFpx / fpx_scale) ** 2)
                 for (let i = 0; i < 15; i++) {
                     tex.replace(15 - i, Math.constrain((15 - i) / this.textureVisibility + dis / this.darknessMod, 1, 15))
                 }
