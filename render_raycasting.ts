@@ -123,6 +123,7 @@ namespace HybridRender {
 
         //sprites & accessories
         sprSelf: Sprite
+        protected hasCustomSelfImage = false
         sprites: Sprite[] = []
         sprites2D: Sprite[] = []
         spriteParticles: particles.ParticleSource[] = []
@@ -530,11 +531,25 @@ namespace HybridRender {
 
         //todo, pre-drawn dirctional image
         public updateSelfImage() {
+            if (this.hasCustomSelfImage) return // don't overwrite a custom image the user set
             const img = this.sprSelf.image
             img.fill(6)
             const arrowLength = img.width / 2
             img.drawLine(arrowLength, arrowLength, arrowLength + this.dirX * arrowLength, arrowLength + this.dirY * arrowLength, 2)
             img.fillRect(arrowLength - 1, arrowLength - 1, 2, 2, 2)
+        }
+
+        // Sets a custom image for "myself sprite" (the player). Once called, the
+        // built-in auto-drawn arrow icon is no longer redrawn over it every frame.
+        setSelfImage(img: Image) {
+            this.sprSelf.setImage(img)
+            this.hasCustomSelfImage = true
+        }
+
+        // Reverts to the built-in auto-drawn arrow icon.
+        clearCustomSelfImage() {
+            this.hasCustomSelfImage = false
+            this.updateSelfImage()
         }
 
         updateControls() {
@@ -591,9 +606,7 @@ namespace HybridRender {
                     sourceY = 0
                 const raw = source.getPixel(sourceX, sourceY)
                 const c = this.ditheredColor(raw, brightness, screenX, y)
-                // TEMP DIAGNOSTIC: paint pink instead of skipping, to visualize
-                // exactly where the code thinks a pixel is transparent (raw==0)
-                this.tempScreen.setPixel(screenX, y, c ? c : 3)
+                if (c) this.tempScreen.setPixel(screenX, y, c)
                 y--
                 sourceY -= stepY
             }
@@ -606,8 +619,7 @@ namespace HybridRender {
             while (y < Math.round(screenDown)) {
                 const raw = source.getPixel(sourceX, sourceY)
                 const c = this.ditheredColor(raw, brightness, screenX, y)
-                // TEMP DIAGNOSTIC: same as above
-                this.tempScreen.setPixel(screenX, y, c ? c : 3)
+                if (c) this.tempScreen.setPixel(screenX, y, c)
                 y++
                 sourceY += stepY
             }
