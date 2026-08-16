@@ -101,6 +101,33 @@ namespace HybridRender {
         15, 7, 13, 5
     ]
 
+    // Safety cap on how many walls a single ray is allowed to march through when
+    // punching through transparent tiles (fences, windows...). Bounds worst-case
+    // cost per column if someone builds a corridor entirely out of see-through tiles.
+    const MAX_HITS_PER_COLUMN = 4
+
+    // Scans a tileset once and reports, per texture index, whether it contains any
+    // transparent (index 0) pixel. Used so the raycaster only pays the cost of
+    // marching past a wall when that wall could actually have gaps to see through.
+    function computeTransparencyFlags(textures: Image[]): boolean[] {
+        const flags: boolean[] = []
+        for (let i = 0; i < textures.length; i++) {
+            const t = textures[i]
+            let found = false
+            if (t) {
+                for (let ty = 0; ty < t.height && !found; ty++) {
+                    for (let tx = 0; tx < t.width && !found; tx++) {
+                        if (t.getPixel(tx, ty) == 0) {
+                            found = true
+                        }
+                    }
+                }
+            }
+            flags[i] = found
+        }
+        return flags
+    }
+
     export class RayCastingRender {
         private tempScreen: Image = image.create(SW, SH)
         public darknessMod = 1
@@ -142,6 +169,18 @@ namespace HybridRender {
         protected oldRender: scene.Renderable
         protected myRender: scene.Renderable
         protected _ceilingMap: tiles.TileMapData
+
+        // true for each texture index that contains at least one transparent (index 0)
+        // pixel; computed once when textures load so per-column ray marching can tell,
+        // in O(1), whether it needs to keep looking for what's behind a hit
+        hasTransparency: boolean[] = []
+
+        // preallocated, reused every column: the stack of wall hits found while
+        // marching a ray past transparent tiles, nearest hit stored at index 0
+        private hitMapX: number[] = []
+        private hitMapY: number[] = []
+        private hitSide: boolean[] = []
+        private hitColor: number[] = []
 
         //render
         protected wallHeightInView: number
@@ -398,6 +437,7 @@ namespace HybridRender {
             const sc = game.currentScene()
             this.map = sc.tileMap.data
             this.textures = sc.tileMap.data.getTileset()
+            this.hasTransparency = computeTransparencyFlags(this.textures)
             this.tilemapScaleSize = 1 << sc.tileMap.data.scale
             this.oldRender = sc.tileMap.renderable
             this.spriteLikes.removeElement(this.oldRender)
@@ -631,9 +671,6 @@ namespace HybridRender {
             this.selfXFpx = this.xFpx
             this.selfYFpx = this.yFpx
 
-            let drawStart = 0
-            let drawHeight = 0
-            let lastDist = -1, lastTexX = -1, lastMapX = -1, lastMapY = -1
             this.viewZPos = this.spriteMotionZ[this.sprSelf.id].p + (this.sprSelf._height as any as number) - (2 << fpx) + this.cameraOffsetZ_fpx
             let cameraRangeAngle = Math.atan(this.fov) + .1 //tolerance for spr center just out of camera
             //debug
@@ -800,6 +837,7 @@ namespace HybridRender {
                 }
 
                 let color = 0
+                let hitCount = 0
 
                 while (true) {
                     //jump to next map square, OR in x-direction, OR in y-direction
@@ -816,61 +854,59 @@ namespace HybridRender {
                     if (this.map.isOutsideMap(mapX, mapY))
                         break
                     color = this.map.getTile(mapX, mapY)
-                    if (this.map.isWall(mapX, mapY))
-                        break; // hit!
+                    if (this.map.isWall(mapX, mapY)) {
+                        // record this hit; only keep marching past it if its texture
+                        // actually has transparent pixels worth looking through
+                        this.hitMapX[hitCount] = mapX
+                        this.hitMapY[hitCount] = mapY
+                        this.hitSide[hitCount] = sideWallHit
+                        this.hitColor[hitCount] = color
+                        hitCount++
+                        if (hitCount >= MAX_HITS_PER_COLUMN || !this.hasTransparency[color])
+                            break; // hit!
+                    }
                 }
 
-                if (this.map.isOutsideMap(mapX, mapY))
+                if (hitCount == 0)
                     continue
 
-                let perpWallDist = 0
-                let wallX = 0
-                if (!sideWallHit) {
-                    perpWallDist = Math.idiv(((mapX << fpx) - this.selfXFpx + (1 - mapStepX << fpx - 1)) << fpx, rayDirX)
-                    wallX = this.selfYFpx + (perpWallDist * rayDirY >> fpx);
-                } else {
-                    perpWallDist = Math.idiv(((mapY << fpx) - this.selfYFpx + (1 - mapStepY << fpx - 1)) << fpx, rayDirY)
-                    wallX = this.selfXFpx + (perpWallDist * rayDirX >> fpx);
+                // draw farthest hit first, nearest hit last, so a nearer transparent
+                // gap reveals the farther wall that was already drawn underneath it
+                for (let hi = hitCount - 1; hi >= 0; hi--) {
+                    mapX = this.hitMapX[hi]
+                    mapY = this.hitMapY[hi]
+                    sideWallHit = this.hitSide[hi]
+                    color = this.hitColor[hi]
+
+                    let perpWallDist = 0
+                    let wallX = 0
+                    if (!sideWallHit) {
+                        perpWallDist = Math.idiv(((mapX << fpx) - this.selfXFpx + (1 - mapStepX << fpx - 1)) << fpx, rayDirX)
+                        wallX = this.selfYFpx + (perpWallDist * rayDirY >> fpx);
+                    } else {
+                        perpWallDist = Math.idiv(((mapY << fpx) - this.selfYFpx + (1 - mapStepY << fpx - 1)) << fpx, rayDirY)
+                        wallX = this.selfXFpx + (perpWallDist * rayDirX >> fpx);
+                    }
+                    wallX &= FPX_MAX
+
+                    let tex = this.textures[color]
+                    if (!tex)
+                        continue
+
+                    const dis = Math.abs(perpWallDist) / fpx_scale
+                    const brightness = this.brightnessAt(dis)
+
+                    let texX = (wallX * tex.width) >> fpx;
+
+                    const lineHeight = (this.wallHeightInView / perpWallDist)
+                    const drawEnd = lineHeight * this.viewZPos / this.tilemapScaleSize / fpx_scale;
+                    const horizontBreak = 1 - this.viewZPos / this.tilemapScaleSize / fpx_scale;
+
+                    this.blitRowBreak(x, SHHalf + drawEnd - lineHeight, SHHalf + drawEnd, tex, texX, tex.height * horizontBreak, brightness)
+
+                    if (hi == 0)
+                        this.dist[x] = perpWallDist
                 }
-                wallX &= FPX_MAX
-
-                // color = (color - 1) * 2
-                // if (sideWallHit) color++
-
-                let tex = this.textures[color]
-                if (!tex)
-                    continue
-
-                const dis = Math.abs(perpWallDist) / fpx_scale
-                const brightness = this.brightnessAt(dis)
-
-                let texX = (wallX * tex.width) >> fpx;
-                // if ((!sideWallHit && rayDirX > 0) || (sideWallHit && rayDirY < 0))
-                //     texX = tex.width - texX - 1;
-
-                const lineHeight = (this.wallHeightInView / perpWallDist)
-                const drawEnd = lineHeight * this.viewZPos / this.tilemapScaleSize / fpx_scale;
-                const horizontBreak = 1 - this.viewZPos / this.tilemapScaleSize / fpx_scale;
-                if (perpWallDist !== lastDist && (texX !== lastTexX || mapX !== lastMapX || mapY !== lastMapY)) {//neighbor line of tex share same parameters
-
-                    drawStart = drawEnd - lineHeight * (this._wallZScale);
-                    drawHeight = (Math.ceil(drawEnd) - Math.ceil(drawStart))
-                    drawStart += (SH >> 1)
-
-                    lastDist = perpWallDist
-                    lastTexX = texX
-                    lastMapX = mapX
-                    lastMapY = mapY
-                }
-                //fix start&end points to avoid regmatic between lines
-
-
-                //if (x < SWHalf)
-                //    this.tempScreen.blitRow(x, drawStart, tex, texX, drawHeight)
-                //else
-                this.blitRowBreak(x, SHHalf + drawEnd - lineHeight, SHHalf + drawEnd, tex, texX, tex.height * horizontBreak, brightness)
-
-                this.dist[x] = perpWallDist
             }
             //debug
             // info.setScore(control.millis()-ms)
