@@ -106,28 +106,6 @@ namespace HybridRender {
     // cost per column if someone builds a corridor entirely out of see-through tiles.
     const MAX_HITS_PER_COLUMN = 4
 
-    // Scans a tileset once and reports, per texture index, whether it contains any
-    // transparent (index 0) pixel. Used so the raycaster only pays the cost of
-    // marching past a wall when that wall could actually have gaps to see through.
-    function computeTransparencyFlags(textures: Image[]): boolean[] {
-        const flags: boolean[] = []
-        for (let i = 0; i < textures.length; i++) {
-            const t = textures[i]
-            let found = false
-            if (t) {
-                for (let ty = 0; ty < t.height && !found; ty++) {
-                    for (let tx = 0; tx < t.width && !found; tx++) {
-                        if (t.getPixel(tx, ty) == 0) {
-                            found = true
-                        }
-                    }
-                }
-            }
-            flags[i] = found
-        }
-        return flags
-    }
-
     export class RayCastingRender {
         private tempScreen: Image = image.create(SW, SH)
         public darknessMod = 1
@@ -170,10 +148,34 @@ namespace HybridRender {
         protected myRender: scene.Renderable
         protected _ceilingMap: tiles.TileMapData
 
-        // true for each texture index that contains at least one transparent (index 0)
-        // pixel; computed once when textures load so per-column ray marching can tell,
-        // in O(1), whether it needs to keep looking for what's behind a hit
+        // Cache of whether each texture index contains any transparent (index 0)
+        // pixel. Populated lazily, per tile, the first time that tile is actually hit
+        // by a ray (see textureHasTransparency) — never precomputed for the whole
+        // tileset up front, so it can't have stale/missing entries for tiles that
+        // weren't part of the tileset yet at load time.
         hasTransparency: boolean[] = []
+
+        // Returns (and caches) whether the given texture index has any transparent
+        // pixel. Used by wall marching to decide whether to keep looking for what's
+        // behind a hit.
+        private textureHasTransparency(color: number): boolean {
+            let flag = this.hasTransparency[color]
+            if (flag === undefined) {
+                const t = this.textures[color]
+                flag = false
+                if (t) {
+                    for (let ty = 0; ty < t.height && !flag; ty++) {
+                        for (let tx = 0; tx < t.width && !flag; tx++) {
+                            if (t.getPixel(tx, ty) == 0) {
+                                flag = true
+                            }
+                        }
+                    }
+                }
+                this.hasTransparency[color] = flag
+            }
+            return flag
+        }
 
         // preallocated, reused every column: the stack of wall hits found while
         // marching a ray past transparent tiles, nearest hit stored at index 0
@@ -437,7 +439,7 @@ namespace HybridRender {
             const sc = game.currentScene()
             this.map = sc.tileMap.data
             this.textures = sc.tileMap.data.getTileset()
-            this.hasTransparency = computeTransparencyFlags(this.textures)
+            this.hasTransparency = [] // reset lazy transparency cache for the new tileset
             this.tilemapScaleSize = 1 << sc.tileMap.data.scale
             this.oldRender = sc.tileMap.renderable
             this.spriteLikes.removeElement(this.oldRender)
@@ -862,7 +864,7 @@ namespace HybridRender {
                         this.hitSide[hitCount] = sideWallHit
                         this.hitColor[hitCount] = color
                         hitCount++
-                        if (hitCount >= MAX_HITS_PER_COLUMN || !this.hasTransparency[color])
+                        if (hitCount >= MAX_HITS_PER_COLUMN || !this.textureHasTransparency(color))
                             break; // hit!
                     }
                 }
