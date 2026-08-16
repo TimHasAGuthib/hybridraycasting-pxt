@@ -591,7 +591,9 @@ namespace HybridRender {
                     sourceY = 0
                 const raw = source.getPixel(sourceX, sourceY)
                 const c = this.ditheredColor(raw, brightness, screenX, y)
-                if (c) this.tempScreen.setPixel(screenX, y, c)
+                // TEMP DIAGNOSTIC: paint pink instead of skipping, to visualize
+                // exactly where the code thinks a pixel is transparent (raw==0)
+                this.tempScreen.setPixel(screenX, y, c ? c : 3)
                 y--
                 sourceY -= stepY
             }
@@ -604,7 +606,8 @@ namespace HybridRender {
             while (y < Math.round(screenDown)) {
                 const raw = source.getPixel(sourceX, sourceY)
                 const c = this.ditheredColor(raw, brightness, screenX, y)
-                if (c) this.tempScreen.setPixel(screenX, y, c)
+                // TEMP DIAGNOSTIC: same as above
+                this.tempScreen.setPixel(screenX, y, c ? c : 3)
                 y++
                 sourceY += stepY
             }
@@ -714,12 +717,31 @@ namespace HybridRender {
                         let ceilingTex = this.ceilingTextures[tileType];
                         ceilingX += ceilingStepX;
                         ceilingY += ceilingStepY;
-                        if (!ceilingTex)
+                        if (!ceilingTex) {
+                            // no tile painted here on the ceiling map: show sky instead
+                            // of leaving the pixel at whatever the frame was cleared to
+                            let backX = (backgroundOffset + x) % SW
+                            let backC = sc.background.image.getPixel(backX, y)
+                            if (backC) this.tempScreen.setPixel(x, y, backC)
                             continue
+                        }
 
                         let raw = ceilingTex.getPixel(tx, ty);
                         let c = this.ditheredColor(raw, rowBrightness, x, y);
                         if (c) this.tempScreen.setPixel(x, y, c);
+                    }
+                }
+            } else {
+                // No ceiling tilemap: paint the scrolling sky across the whole upper
+                // half up front (same as floor/ceiling above), so any transparent gap
+                // in a wall reveals sky instead of an empty/black hole. Previously this
+                // was only ever painted in the sliver strictly above a wall's rectangle,
+                // never behind the wall itself.
+                for (let y = 0; y < SHHalf; y++) {
+                    for (let x = 0; x < SW; x++) {
+                        let backX = (backgroundOffset + x) % SW
+                        let c = sc.background.image.getPixel(backX, y)
+                        this.tempScreen.setPixel(x, y, c)
                     }
                 }
             }
@@ -837,15 +859,6 @@ namespace HybridRender {
                 this.blitRowBreak(x, SHHalf + drawEnd - lineHeight, SHHalf + drawEnd, tex, texX, tex.height * horizontBreak, brightness)
 
                 this.dist[x] = perpWallDist
-
-                // background 
-                if (!this.ceilingMap) {
-                    for (let y = 0; y < drawStart; y++) {
-                        let backX = (backgroundOffset + x) % SW
-                        let c = sc.background.image.getPixel(backX, y)
-                        this.tempScreen.setPixel(x, y, c)
-                    }
-                }
             }
             //debug
             // info.setScore(control.millis()-ms)
