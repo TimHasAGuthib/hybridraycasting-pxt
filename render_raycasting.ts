@@ -106,6 +106,92 @@ namespace HybridRender {
     // cost per column if someone builds a corridor entirely out of see-through tiles.
     const MAX_HITS_PER_COLUMN = 4
 
+    // ===================== 3D models as sprites =====================
+    //
+    // A lightweight flat-shaded polygon mesh that can be attached to a
+    // normal Sprite so it renders as a real, rotatable solid instead of a
+    // flat billboard image - think low-poly PS1/N64-era props (crates,
+    // pillars, trees...) sitting inside the raycast world.
+    //
+    // Coordinate convention (all plain numbers, in pixels):
+    //   x - left(-) / right(+), rotated by the model's yaw
+    //   y - down(-) / up(+), NOT affected by yaw (vertical axis)
+    //   z - back(-) / forward(+), rotated by the model's yaw
+    // The origin (0,0,0) sits at the sprite's horizontal center, at ground
+    // height - the same point a normal billboard sprite's bottom edge
+    // would occupy. This mirrors how sprite width/height are already
+    // pixel-based in this engine, while horizontal *position* is tile-based.
+    //
+    // Faces must be planar and convex (triangles or quads are the common
+    // case) and are simply flat-filled - there are no per-pixel normals or
+    // texture-mapped faces, matching the resolution/perf budget of the
+    // rest of this renderer.
+    export interface ModelVertex {
+        x: number
+        y: number
+        z: number
+    }
+
+    export interface ModelFace {
+        // indices into the model's vertices array; 3 for a triangle, 4 for
+        // a quad, etc. Winding order does not matter - faces are drawn with
+        // a painter's algorithm (farthest first) rather than backface culled.
+        indices: number[]
+        color: number
+        // optional extra multiplier (0..1) applied on top of the normal
+        // distance-based darkening, to fake per-face lighting - e.g. give a
+        // box's top face a higher shade than its sides.
+        shade?: number
+    }
+
+    export class Model3D {
+        constructor(
+            public vertices: ModelVertex[],
+            public faces: ModelFace[]
+        ) { }
+    }
+
+    // A couple of ready-made low-poly primitives so you don't have to
+    // hand-type vertex lists to get started.
+    export namespace Model3DBuilder {
+        // Axis-aligned box centered horizontally on the sprite anchor,
+        // sitting on the ground (y=0 is the bottom face, y=height is the top).
+        export function box(width: number, depth: number, height: number, color: number): Model3D {
+            const hw = width / 2, hd = depth / 2
+            const v: ModelVertex[] = [
+                { x: -hw, y: 0, z: -hd }, { x: hw, y: 0, z: -hd }, { x: hw, y: 0, z: hd }, { x: -hw, y: 0, z: hd },
+                { x: -hw, y: height, z: -hd }, { x: hw, y: height, z: -hd }, { x: hw, y: height, z: hd }, { x: -hw, y: height, z: hd },
+            ]
+            const f: ModelFace[] = [
+                { indices: [4, 5, 6, 7], color: color, shade: 1 },     // top
+                { indices: [1, 0, 3, 2], color: color, shade: 0.55 },  // bottom
+                { indices: [0, 1, 5, 4], color: color, shade: 0.85 },  // front (-z)
+                { indices: [2, 3, 7, 6], color: color, shade: 0.85 },  // back (+z)
+                { indices: [3, 0, 4, 7], color: color, shade: 0.7 },   // left (-x)
+                { indices: [1, 2, 6, 5], color: color, shade: 0.7 },   // right (+x)
+            ]
+            return new Model3D(v, f)
+        }
+
+        // 4-sided pyramid, base centered on the sprite anchor at y=0, apex at y=height.
+        export function pyramid(base: number, height: number, color: number): Model3D {
+            const h = base / 2
+            const v: ModelVertex[] = [
+                { x: -h, y: 0, z: -h }, { x: h, y: 0, z: -h }, { x: h, y: 0, z: h }, { x: -h, y: 0, z: h },
+                { x: 0, y: height, z: 0 },
+            ]
+            const f: ModelFace[] = [
+                { indices: [1, 0, 3, 2], color: color, shade: 0.55 },
+                { indices: [0, 1, 4], color: color, shade: 0.9 },
+                { indices: [1, 2, 4], color: color, shade: 0.8 },
+                { indices: [2, 3, 4], color: color, shade: 0.9 },
+                { indices: [3, 0, 4], color: color, shade: 0.7 },
+            ]
+            return new Model3D(v, f)
+        }
+    }
+    // =================== end 3D models as sprites ===================
+
     export class RayCastingRender {
         private tempScreen: Image = image.create(SW, SH)
         public darknessMod = 1
@@ -135,6 +221,19 @@ namespace HybridRender {
         spriteLikes: SpriteLike[] = []
         spriteAnimations: Animations[] = []
         protected spriteMotionZ: MotionSet1D[] = []
+
+        // 3D models attached to sprites (see "3D models as sprites" above),
+        // indexed by sprite id, same pattern as spriteAnimations/spriteMotionZ.
+        protected spriteModels: Model3D[] = []
+        protected spriteModelScale: number[] = []
+        protected spriteModelYaw: number[] = []
+        // scratch buffers reused every model draw to avoid per-frame GC churn;
+        // sized on demand in drawModel3D, indexed by vertex index within
+        // whichever model is currently being drawn
+        private modelScreenX: number[] = []
+        private modelScreenY: number[] = []
+        private modelDepth: number[] = []
+        private modelFaceOrder: number[] = []
         protected sayRederers: sprites.BaseSpriteSayRenderer[] = []
         protected sayEndTimes: number[] = []
 
@@ -406,6 +505,7 @@ namespace HybridRender {
                                 this.sayRederers.removeElement(sayRenderer)
                                 sayRenderer.destroy()
                             }
+                            this.spriteModels[spr.id] = undefined
                         })
                     }
                 } else if (spr instanceof particles.ParticleSource) {
@@ -953,6 +1053,177 @@ namespace HybridRender {
             this.onSpriteDirectionUpdateHandler = handler
         }
 
+        // Attaches a Model3D to a sprite so it renders as a real, rotatable
+        // solid instead of the sprite's flat billboard image. While a model
+        // is attached, the sprite's own `image` is no longer drawn - say
+        // bubbles and particles anchored to the sprite keep working as before.
+        // `scale` multiplies every model coordinate (1 = the model's own
+        // pixel units); `yaw` is the model's initial rotation in radians.
+        setSpriteModel(spr: Sprite, model: Model3D, scale: number = 1, yaw: number = 0) {
+            this.getMotionZ(spr) // ensure motion/height bookkeeping exists for this sprite
+            this.spriteModels[spr.id] = model
+            this.spriteModelScale[spr.id] = scale
+            this.spriteModelYaw[spr.id] = yaw
+        }
+
+        // Removes a previously attached model, reverting the sprite back to
+        // drawing its normal flat billboard image.
+        clearSpriteModel(spr: Sprite) {
+            this.spriteModels[spr.id] = undefined
+        }
+
+        hasSpriteModel(spr: Sprite): boolean {
+            return !!this.spriteModels[spr.id]
+        }
+
+        // Sets a sprite's attached model to an absolute yaw (radians, rotation
+        // around the vertical axis).
+        setSpriteModelYaw(spr: Sprite, yaw: number) {
+            this.spriteModelYaw[spr.id] = yaw
+        }
+
+        // Rotates a sprite's attached model by a relative amount (radians) -
+        // handy to call every frame/tick to make props spin in place.
+        rotateSpriteModel(spr: Sprite, deltaYaw: number) {
+            this.spriteModelYaw[spr.id] = (this.spriteModelYaw[spr.id] || 0) + deltaYaw
+        }
+
+        getSpriteModelYaw(spr: Sprite): number {
+            return this.spriteModelYaw[spr.id] || 0
+        }
+
+        setSpriteModelScale(spr: Sprite, scale: number) {
+            this.spriteModelScale[spr.id] = scale
+        }
+
+        // Projects and flat-fills every face of a sprite's attached model.
+        // Reuses the caller's already-computed, wall-occlusion-tested column
+        // range [blitXMin, blitXMin+blitWidth) for the sprite as a whole
+        // (see drawSprite below), then additionally checks each triangle's
+        // nearest vertex against the per-column wall distance buffer so
+        // individual faces at different depths still occlude correctly
+        // against nearby walls.
+        private drawModel3D(spr: Sprite, model: Model3D, blitXMin: number, blitWidth: number) {
+            const scale = this.spriteModelScale[spr.id] || 1
+            const yaw = this.spriteModelYaw[spr.id] || 0
+            const invDet = one2 / (this.planeX * this.dirYFpx - this.dirXFpx * this.planeY)
+            const baseSpriteX = this.sprXFx8(spr) - this.xFpx
+            const baseSpriteY = this.sprYFx8(spr) - this.yFpx
+            const groundNumerator = this.viewZPos - this.spriteMotionZ[spr.id].p
+            const cosY = Math.cos(yaw), sinY = Math.sin(yaw)
+
+            const verts = model.vertices
+            for (let i = 0; i < verts.length; i++) {
+                const v = verts[i]
+                // rotate the model's horizontal footprint around its vertical
+                // axis, then scale; height (y) is not affected by yaw
+                const rx = (v.x * cosY - v.z * sinY) * scale
+                const rz = (v.x * sinY + v.z * cosY) * scale
+                // rx/rz are pixel offsets - divide by tilemapScaleSize to
+                // convert into the same tile-based fixed-point scale that
+                // sprXFx8/xFpx use for horizontal world position
+                const vSpriteX = baseSpriteX + rx / this.tilemapScaleSize
+                const vSpriteY = baseSpriteY + rz / this.tilemapScaleSize
+                let tY = invDet * (-this.planeY * vSpriteX + this.planeX * vSpriteY) >> fpx
+                // clamp near/behind-camera vertices: without this, a vertex
+                // crossing the eye plane would flip the projection sign and
+                // draw wildly wrong. Models that are mostly this close to the
+                // camera may show minor stretching - there's no true near-plane
+                // clipping here, only this safety clamp.
+                if (tY < (one >> 4)) tY = one >> 4
+                const tX = invDet * (this.dirYFpx * vSpriteX - this.dirXFpx * vSpriteY) >> fpx
+                const lineHeight = Math.idiv(this.wallHeightInView, tY)
+                // heightNumerator==groundNumerator projects to the same
+                // screen Y a normal billboard sprite's bottom edge would use
+                // (see drawSprite's drawStart, which is this same expression
+                // plus a full sprite-height offset); subtracting the vertex's
+                // own height moves it up the screen from there.
+                const heightNumerator = groundNumerator - tofpx(v.y * scale)
+                this.modelScreenX[i] = Math.ceil(SWHalf * (1 - tX / tY)) - this.cameraOffsetX
+                this.modelScreenY[i] = SHHalf + (lineHeight * (heightNumerator / this.tilemapScaleSize) >> fpx)
+                this.modelDepth[i] = tY
+            }
+
+            const faces = model.faces
+            // painter's algorithm: draw farthest faces first so nearer faces
+            // correctly overpaint them - enough for small convex solids
+            // without needing a full per-pixel depth buffer
+            this.modelFaceOrder.length = 0
+            for (let i = 0; i < faces.length; i++) this.modelFaceOrder.push(i)
+            this.modelFaceOrder.sort((a, b) => this.modelFaceAvgDepth(faces[b]) - this.modelFaceAvgDepth(faces[a]))
+
+            const blitXMax = blitXMin + blitWidth
+            for (let oi = 0; oi < this.modelFaceOrder.length; oi++) {
+                const face = faces[this.modelFaceOrder[oi]]
+                const dis = this.modelFaceAvgDepth(face) / fpx_scale
+                let brightness = this.brightnessAt(dis)
+                if (face.shade !== undefined) brightness *= face.shade
+                const idx = face.indices
+                // fan-triangulate: works for any planar convex polygon
+                for (let i = 1; i + 1 < idx.length; i++) {
+                    this.fillTriangle(idx[0], idx[i], idx[i + 1], face.color, brightness, blitXMin, blitXMax)
+                }
+            }
+        }
+
+        private modelFaceAvgDepth(face: ModelFace): number {
+            let sum = 0
+            for (const i of face.indices) sum += this.modelDepth[i]
+            return sum / face.indices.length
+        }
+
+        // Classic top-to-bottom scanline triangle fill, reading projected
+        // vertex positions out of the modelScreenX/Y/Depth scratch buffers
+        // that drawModel3D just populated.
+        private fillTriangle(i0: number, i1: number, i2: number, color: number, brightness: number, xMin: number, xMax: number) {
+            let ax = this.modelScreenX[i0], ay = this.modelScreenY[i0]
+            let bx = this.modelScreenX[i1], by = this.modelScreenY[i1]
+            let cx = this.modelScreenX[i2], cy = this.modelScreenY[i2]
+            // sort the three points top-to-bottom by screen Y (ay <= by <= cy)
+            if (ay > by) { const tx = ax, ty = ay; ax = bx; ay = by; bx = tx; by = ty }
+            if (ay > cy) { const tx = ax, ty = ay; ax = cx; ay = cy; cx = tx; cy = ty }
+            if (by > cy) { const tx = bx, ty = by; bx = cx; by = cy; cx = tx; cy = ty }
+
+            const nearestDepth = Math.min(this.modelDepth[i0], Math.min(this.modelDepth[i1], this.modelDepth[i2]))
+
+            const yTop = Math.max(0, Math.ceil(ay))
+            const yMid = Math.min(SH, Math.ceil(by))
+            const yBot = Math.min(SH, Math.ceil(cy))
+            if (yTop >= yBot) return // degenerate or fully off-screen vertically
+
+            // edge a->c spans the full height of the triangle; a->b and b->c
+            // each cover one half - interpolate x along each per scanline
+            const slopeAC = cy != ay ? (cx - ax) / (cy - ay) : 0
+            const slopeAB = by != ay ? (bx - ax) / (by - ay) : 0
+            const slopeBC = cy != by ? (cx - bx) / (cy - by) : 0
+
+            for (let y = yTop; y < yMid; y++) {
+                const xLeft = ax + (y - ay) * slopeAC
+                const xRight = ax + (y - ay) * slopeAB
+                this.fillModelSpan(y, xLeft, xRight, color, brightness, nearestDepth, xMin, xMax)
+            }
+            for (let y = yMid; y < yBot; y++) {
+                const xLeft = ax + (y - ay) * slopeAC
+                const xRight = bx + (y - by) * slopeBC
+                this.fillModelSpan(y, xLeft, xRight, color, brightness, nearestDepth, xMin, xMax)
+            }
+        }
+
+        private fillModelSpan(y: number, xa: number, xb: number, color: number, brightness: number, nearestDepth: number, xMin: number, xMax: number) {
+            let x0 = Math.round(Math.min(xa, xb))
+            let x1 = Math.round(Math.max(xa, xb))
+            if (x0 < xMin) x0 = xMin
+            if (x1 > xMax) x1 = xMax
+            for (let x = x0; x < x1; x++) {
+                // a wall drawn earlier in this column is nearer than every
+                // point of this triangle - it's fully hidden here
+                if (this.dist[x] && this.dist[x] < nearestDepth)
+                    continue
+                const c = this.ditheredColor(color, brightness, x, y)
+                if (c) this.tempScreen.setPixel(x, y, c)
+            }
+        }
+
         drawSprite(spr: Sprite, index: number, transformX: number, transformY: number, myAngle: number) {
             const spriteScreenX = Math.ceil((SWHalf) * (1 - transformX / transformY)) - this.cameraOffsetX;
             const spriteScreenHalfWidth = Math.idiv((spr._width as any as number) / this.tilemapScaleSize / 2 * this.wallWidthInView, transformY)  //origin: (texSpr.width / 2 << fpx) / transformY / this.fov / 3 * 2 * 4
@@ -983,30 +1254,38 @@ namespace HybridRender {
             const lineHeight = Math.idiv(this.wallHeightInView, transformY)
             const drawStart = SHHalf + (lineHeight * ((this.viewZPos - this.spriteMotionZ[spr.id].p - (spr._height as any as number)) / this.tilemapScaleSize) >> fpx)
 
-            //for textures=image[][], abandoned
-            //    const texSpr = spr.getTexture(Math.floor(((Math.atan2(spr.vxFx8, spr.vyFx8) - myAngle) / Math.PI / 2 + 2-.25) * spr.textures.length +.5) % spr.textures.length)
-            //for deal in user code
-            if (this.onSpriteDirectionUpdateHandler)
-                this.onSpriteDirectionUpdateHandler(spr, ((Math.atan2(spr._vx as any as number, spr._vy as any as number) - myAngle) / Math.PI / 2 + 2 - .25))
-            //for CharacterAnimation ext.
-            //     const iTexture = Math.floor(((Math.atan2(spr._vx as any as number, spr._vy as any as number) - myAngle) / Math.PI / 2 + 2 - .25) * 4 + .5) % 4
-            //     const characterAniDirs = [Predicate.MovingLeft,Predicate.MovingDown, Predicate.MovingRight, Predicate.MovingUp]
-            //     character.setCharacterState(spr, character.rule(characterAniDirs[iTexture]))
-            //for this.spriteAnimations
-            const texSpr = !this.spriteAnimations[spr.id] ? spr.image : this.spriteAnimations[spr.id].getFrameByDir(((Math.atan2(spr._vx as any as number, spr._vy as any as number) - myAngle) / Math.PI / 2 + 2 - .25))
+            const model = this.spriteModels[spr.id]
+            if (model) {
+                // real 3D solid: project & flat-fill its faces into the same
+                // wall-occlusion-tested column range [blitXSpr, blitXSpr+blitWidthSpr)
+                // the flat-billboard path below would have blitted into
+                this.drawModel3D(spr, model, blitXSpr, blitWidthSpr)
+            } else {
+                //for textures=image[][], abandoned
+                //    const texSpr = spr.getTexture(Math.floor(((Math.atan2(spr.vxFx8, spr.vyFx8) - myAngle) / Math.PI / 2 + 2-.25) * spr.textures.length +.5) % spr.textures.length)
+                //for deal in user code
+                if (this.onSpriteDirectionUpdateHandler)
+                    this.onSpriteDirectionUpdateHandler(spr, ((Math.atan2(spr._vx as any as number, spr._vy as any as number) - myAngle) / Math.PI / 2 + 2 - .25))
+                //for CharacterAnimation ext.
+                //     const iTexture = Math.floor(((Math.atan2(spr._vx as any as number, spr._vy as any as number) - myAngle) / Math.PI / 2 + 2 - .25) * 4 + .5) % 4
+                //     const characterAniDirs = [Predicate.MovingLeft,Predicate.MovingDown, Predicate.MovingRight, Predicate.MovingUp]
+                //     character.setCharacterState(spr, character.rule(characterAniDirs[iTexture]))
+                //for this.spriteAnimations
+                const texSpr = !this.spriteAnimations[spr.id] ? spr.image : this.spriteAnimations[spr.id].getFrameByDir(((Math.atan2(spr._vx as any as number, spr._vy as any as number) - myAngle) / Math.PI / 2 + 2 - .25))
 
-            const sprTexRatio = texSpr.width / spriteScreenHalfWidth / 2
-            helpers.imageBlit(
-                this.tempScreen,
-                blitXSpr,
-                drawStart,
-                blitWidthSpr,
-                lineHeight * spr.height / this.tilemapScaleSize,
-                texSpr,
-                (blitXSpr - (spriteScreenX - spriteScreenHalfWidth)) * sprTexRatio
-                ,
-                0,
-                blitWidthSpr * sprTexRatio, texSpr.height, true, false)
+                const sprTexRatio = texSpr.width / spriteScreenHalfWidth / 2
+                helpers.imageBlit(
+                    this.tempScreen,
+                    blitXSpr,
+                    drawStart,
+                    blitWidthSpr,
+                    lineHeight * spr.height / this.tilemapScaleSize,
+                    texSpr,
+                    (blitXSpr - (spriteScreenX - spriteScreenHalfWidth)) * sprTexRatio
+                    ,
+                    0,
+                    blitWidthSpr * sprTexRatio, texSpr.height, true, false)
+            }
 
             screen.fill(0)
             const fpx_div_transformy = Math.roundWithPrecision(transformY / 4 / fpx_scale, 2)
