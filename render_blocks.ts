@@ -94,6 +94,20 @@ namespace HybridRender {
     }
 
     /**
+     * Set a custom image for "myself sprite" (the player). By default this sprite
+     * shows an auto-drawn colored icon with a direction arrow (used in TileMap Mode).
+     * Once you set a custom image, that arrow icon is no longer redrawn over it.
+     * @param img the image to use for myself sprite
+     */
+    //% group="Instance"
+    //% blockId=rcRender_setSelfImage block="set myself sprite image to $img=screen_image_picker"
+    //% weight=97
+    //% help=github:pxt-raycasting/docs/set-self-image
+    export function setSelfImage(img: Image) {
+        raycastingRender.setSelfImage(img)
+    }
+
+    /**
      * Get the render Sprite, which create automatically, for physical collisions, and holding the view point.(but get/set view direction with dirX/dirY, which not in the Sprite class) 
      * You can consider it as "myself", and operate it like a usual sprite.
      * eg: position, speed, scale, collision, ...
